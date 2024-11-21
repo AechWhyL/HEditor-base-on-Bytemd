@@ -1,5 +1,6 @@
 <script setup>
 import Editor from './views/Editor.vue'
+import './style.css'
 </script>
 
 <template>

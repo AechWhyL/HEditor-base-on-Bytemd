@@ -1,5 +1,4 @@
 <script setup lang="js">
-
 // svgs
 import BoldIcon from '@/statics/svgs/bold.svg?component'
 import CodeBlockIcon from '@/statics/svgs/code-block.svg?component'
@@ -22,6 +21,7 @@ import FullScreenIcon from '@/statics/svgs/fullscreen.svg?component'
 import CompressIcon from '@/statics/svgs/compress.svg?component'
 import OnlyEditorIcon from '@/statics/svgs/onlyEditor.svg?component'
 import OnlyPreIcon from '@/statics/svgs/onlyPreview.svg?component'
+import MermaidIcon from '@/statics/svgs/mermaid.svg?component'
 
 import '@/themes/vueStyle.css'
 import 'tippy.js/dist/tippy.css';
@@ -33,7 +33,9 @@ import rehypeStringify from "rehype-stringify";
 import remarkRehype from "remark-rehype";
 import remarkGfm from "remark-gfm";
 import { unified } from "unified";
-import { visit } from 'unist-util-visit'
+import { SKIP, visit } from 'unist-util-visit'
+import rehypeMermaid from 'rehype-mermaid'
+import rehypeSanitize from 'rehype-sanitize'
 
 // codemirror.js
 import { minimalSetup } from "codemirror";
@@ -46,33 +48,12 @@ import tippy from 'tippy.js'
 // lodash.js
 import { debounce } from 'lodash'
 
-const editorHolder = `# Pluto
+// mermaid.js
+import mermaid from 'mermaid'
 
-Pluto is an dwarf planet in the Kuiper belt.
-
-## Contents
-![微信图片_20240426151507.jpg](http://124.222.4.30:4000/i/2024/07/10/668e228edccc2.jpg)
-## History
-
-### Discovery
-
-In the 1840s, Urbain Le Verrier used Newtonian mechanics to predict the
-
-position of…
-
-### Name and symbol
-
-The name Pluto is for the Roman god of the underworld, from a Greek epithet for
-Hades…
-
-### Planet X disproved
-
-Once Pluto was found, its faintness and lack of a viewable disc cast doubt…
-
-## Orbit
-
-Pluto’s orbital period is about 248 years…`
-
+// samples
+import { mermaidSampleNames, mermaidSampleCodes } from '@/samples/MermaidGraphSamples.js'
+import { MarkDownSample } from '@/samples/MarkDownSample.js'
 
 // dataRefs
 const html = ref('')
@@ -81,11 +62,10 @@ const tocVisible = ref(false)
 const tocData = ref([])
 const syncScrollingEnabled = ref(true)
 const curScrollingArea = ref("")
-const headerVisible = ref(true)
 const isFullscreen = ref(false)
 const editorVisible = ref(true)
 const previewVisible = ref(true)
-
+const lines = ref(0)
 
 // templateRefs
 const previewAreaRef = ref(null)
@@ -144,7 +124,7 @@ const editorAreaStyle = computed(() => {
     }
 })
 
-// globals
+// datas
 const tooltipContents = [
     "加粗",      // index 0
     "斜体",      // index 1
@@ -162,38 +142,43 @@ const tooltipContents = [
     "退出全屏", // index 13
     "仅编辑区", // index 14
     "仅预览区", // index 15
+    "mermaid图表", // index 16
 ]
-
-const activeTooltipContents = [
-    "加粗",      // index 0
-    "斜体",      // index 1
-    "引用",      // index 2
-    "链接",      // index 3
-    "代码块",    // index 4
-    "行内代码",  // index 5
-    "无序列表",   // index 6
-    "删除线",     // index 7
-    "标题", // index 8
-    "表格",  // index 9
-    "图片",  // index 10
-    "目录", // index 11 
-    "全屏", // index 12
-    "退出全屏", // index 13
-    "还原默认", // index 14
-    "还原默认", // index 15
-]
-
 let cmView = null
 let unistTreeNodes = []
 let unistTreeTops = []
 let previewDomTops = []
 let unistHeadingTops = []
 
+function wrapMermaid() {
+    return function (tree) {
+        console.log(tree)
+        visit(tree, 'element', (node, index, parent) => {
+            if (node.tagName === 'svg' && node.properties.id.startsWith('mermaid')) {
+                const wrapNode = {
+                    type: 'element',
+                    children: [node],
+                    properties: {
+                        className: ['mermaid-svg-wrapper']
+                    },
+                    tagName: 'div'
+                }
+                parent.children.splice(index, 1, wrapNode)
+                console.log("wrapped:", parent)
+                return [SKIP, index + 1]
+            }
+        })
+    }
+}
+
 function generateToc() {
     return function (tree) {
         const headings = []
         const headingTops = []
         visit(tree, "heading", (node) => {
+            if (node.children.length <= 0) {
+                return
+            }
             headings.push({
                 depth: node.depth,
                 content: node.children[0].value,
@@ -214,36 +199,43 @@ function getUnistTree() {
     }
 }
 
+mermaid.initialize({ startOnLoad: true, suppressErrorRendering: true, wrap: true })
+
 const uniProcessor = unified()
     .use(remarkParse)
     .use(remarkGfm)
     .use(generateToc)
     .use(getUnistTree)
     .use(remarkRehype)
+    .use(rehypeSanitize)
+    .use(rehypeMermaid, {
+        errorFallback: function () {
+            console.log("Mermaid parse error callback. It was mostly caused by syntax problems. Maybe you were just in the middle of finishing your graths. If so, ignore this. :)")
+        },
+        strategy: 'inline-svg'
+    })
+    .use(wrapMermaid)
     .use(rehypeStringify)
 
-function md2HTML(mdText) {
-    return uniProcessor.processSync(mdText)
+async function md2HTML(mdText) {
+    return uniProcessor.process(mdText)
 }
 
-watch(md, (newText, oldText) => {
-    html.value = md2HTML(newText)
-    updateTocActive()
+watch(md, async (newText, oldText) => {
+    html.value = await md2HTML(newText)
 })
 
 function makeBold() {
     const selection = cmView.state.selection.main
     const { from, to } = selection;
-    console.log(from, to)
     let transaction = null;
+    cmView.focus()
     if (from >= to) {
-        cmView.focus()
         transaction = cmView.state.update({
-            changes: { from: cmView.state.doc.length, insert: `**新建粗体**` },
+            changes: { from, to: from, insert: `**新建粗体**` },
             selection: { anchor: from + 2, head: from + 2 + 4 }
         })
     } else {
-        cmView.focus()
         const selectedText = cmView.state.sliceDoc(from, to)
         transaction = cmView.state.update({
             changes: { from, to, insert: `**${selectedText}**` },
@@ -256,12 +248,11 @@ function makeBold() {
 function makeItalic() {
     const selection = cmView.state.selection.main
     const { from, to } = selection;
-    console.log(from, to)
     let transaction = null;
     if (from >= to) {
         cmView.focus()
         transaction = cmView.state.update({
-            changes: { from: cmView.state.doc.length, insert: `*新建斜体*` },
+            changes: { from, insert: `*新建斜体*` },
             selection: { anchor: from + 1, head: from + 1 + 4 }
         })
     } else {
@@ -278,62 +269,37 @@ function makeItalic() {
 function makeQuote() {
     const selection = cmView.state.selection.main
     const { from, to } = selection;
-    console.log(from, to)
     let transaction = null;
-    if (from >= to) {
-        cmView.focus()
-        transaction = cmView.state.update({
-            changes: { from: cmView.state.doc.length, insert: `> 新建引用` },
-            selection: { anchor: from + 2, head: from + 2 + 4 }
-        })
-    } else {
-        cmView.focus()
-        const selectedText = cmView.state.sliceDoc(from, to)
-        transaction = cmView.state.update({
-            changes: { from, to, insert: `> ${selectedText}` },
-            selection: { anchor: from + 2, head: from + 2 + selectedText.length }
-        })
-    }
+    const selectedText = cmView.state.sliceDoc(from, to)
+    transaction = cmView.state.update({
+        changes: { from, to, insert: `> ${selectedText}` },
+        selection: { anchor: from + 2, head: from + 2 + selectedText.length }
+    })
     cmView.dispatch(transaction)
 }
 
 function makeLink() {
     const selection = cmView.state.selection.main
     const { from, to } = selection;
-    console.log(from, to)
-    let transaction = null;
-    if (from >= to) {
-        cmView.focus()
-        transaction = cmView.state.update({
-            changes: { from: cmView.state.doc.length, insert: `[](url)` },
-            selection: { anchor: from + 3, head: from + 3 + 3 }
-        })
-    } else {
-        cmView.focus()
-        const selectedText = cmView.state.sliceDoc(from, to)
-        transaction = cmView.state.update({
-            changes: { from, to, insert: `[${selectedText}](url)` },
-            selection: { anchor: from + 1 + selectedText.length + 2, head: from + 2 + selectedText.length + 2 + 3 }
-        })
-    }
-    cmView.dispatch(transaction)
+    const selectedText = cmView.state.sliceDoc(from, to)
+    cmView.dispatch(cmView.state.update({
+        changes: { from, to, insert: `[${selectedText}](url)` },
+        selection: { anchor: from + 1 + selectedText.length + 2, head: from + 2 + selectedText.length + 2 + 3 }
+    }))
 }
 
 function makeCode() {
     const defaultLanguage = "javascript"
     const codeArea = `\n\`\`\`${defaultLanguage}
-        
+console.log("Hello,world!")
 \`\`\`\n`
     const selection = cmView.state.selection.main
     const { from, to } = selection;
     const { to: lineEnd } = cmView.state.doc.lineAt(from)
-    let transaction = null;
-    cmView.focus()
-    transaction = cmView.state.update({
+    cmView.dispatch(cmView.state.update({
         changes: { from: lineEnd, to: lineEnd, insert: codeArea },
         selection: { anchor: lineEnd + 4, head: lineEnd + 4 + defaultLanguage.length }
-    })
-    cmView.dispatch(transaction)
+    }))
 }
 
 function makeTable() {
@@ -349,6 +315,28 @@ function makeTable() {
     transaction = cmView.state.update({
         changes: { from: lineEnd, to: lineEnd, insert: tableArea },
         selection: { anchor: lineEnd + 5, head: lineEnd + 5 + 2 }
+    })
+    cmView.dispatch(transaction)
+}
+
+function makeMermaidGraph(typeIndex) {
+    const mermaidGraphCode = mermaidSampleCodes[typeIndex]
+    const selection = cmView.state.selection.main
+    const totalLines = cmView.state.doc.lines
+    const { from } = selection;
+    let insertPos = cmView.state.doc.length
+    const { number: curLine } = cmView.state.doc.lineAt(from)
+    for (let i = curLine; i < totalLines; i++) {
+        const lineText = cmView.state.doc.line(i)
+        if (lineText.length === 0) {
+            insertPos = lineText.from
+            break
+        }
+    }
+    let transaction = null;
+    cmView.focus()
+    transaction = cmView.state.update({
+        changes: { from: insertPos, insert: mermaidGraphCode },
     })
     cmView.dispatch(transaction)
 }
@@ -383,12 +371,11 @@ function makeUl() {
     const selection = cmView.state.selection.main
     const { from, to } = selection;
     const { from: lineStart, to: lineEnd } = cmView.state.doc.lineAt(from)
-    console.log(lineStart, lineEnd)
     let transaction = null;
     if (from >= to) {
         cmView.focus()
         transaction = cmView.state.update({
-            changes: { from: cmView.state.doc.length, insert: `- ` },
+            changes: { from: from, to: from, insert: `- ` },
             selection: { anchor: lineStart, head: lineStart + 2 }
         })
     } else {
@@ -405,7 +392,6 @@ function makeUl() {
 function makeInlineCode() {
     const selection = cmView.state.selection.main
     const { from, to } = selection;
-    console.log(from, to)
     let transaction = null;
     if (from >= to) {
         cmView.focus()
@@ -429,7 +415,6 @@ function makeInlineCode() {
 function makeStrikeThrough() {
     const selection = cmView.state.selection.main
     const { from, to } = selection;
-    console.log(from, to)
     let transaction = null;
     if (from >= to) {
         cmView.focus()
@@ -443,6 +428,28 @@ function makeStrikeThrough() {
         transaction = cmView.state.update({
             changes: { from, to, insert: `~~${selectedText}~~` },
             selection: { anchor: from + 2, head: from + 2 + selectedText.length }
+        })
+    }
+    cmView.dispatch(transaction)
+}
+
+function makeTitle(level) {
+    const selection = cmView.state.selection.main
+    const { from, to } = selection;
+    const { from: lineStart, to: lineEnd } = cmView.state.doc.lineAt(from)
+    let transaction = null;
+    if (from >= to) {
+        cmView.focus()
+        transaction = cmView.state.update({
+            changes: { from: lineStart, to: lineEnd, insert: `${'#'.repeat(level)} ` },
+            selection: { anchor: lineStart, head: lineStart + level + 1 }
+        })
+    } else {
+        cmView.focus()
+        const selectedText = cmView.state.sliceDoc(from, to)
+        transaction = cmView.state.update({
+            changes: { from: lineStart, to: lineEnd, insert: `${'#'.repeat(level)} ${selectedText}` },
+            selection: { anchor: lineStart, head: lineStart + level + 1 + selectedText.length }
         })
     }
     cmView.dispatch(transaction)
@@ -464,49 +471,26 @@ function createTooltips() {
             duration: 100,
             interactive: dropdown ? true : false,
             theme: theme,
-            appendTo: document.body,
+            placement: dropdown ? 'bottom' : 'top'
         })
     })
 }
 
-function makeTitle(level) {
-    const selection = cmView.state.selection.main
-    const { from, to } = selection;
-    const { from: lineStart, to: lineEnd } = cmView.state.doc.lineAt(from)
-    let transaction = null;
-    console.log(lineStart, lineEnd)
-    if (from >= to) {
-        cmView.focus()
-        transaction = cmView.state.update({
-            changes: { from: lineStart, to: lineEnd, insert: `${'#'.repeat(level)} ` },
-            selection: { anchor: lineStart, head: lineStart + level + 1 }
-        })
-    } else {
-        cmView.focus()
-        const selectedText = cmView.state.sliceDoc(from, to)
-        transaction = cmView.state.update({
-            changes: { from: lineStart, to: lineEnd, insert: `${'#'.repeat(level)} ${selectedText}` },
-            selection: { anchor: lineStart, head: lineStart + level + 1 + selectedText.length }
-        })
-    }
-    cmView.dispatch(transaction)
-}
-
 function createCodemirrorEditor() {
-    const update = (update) => {
-        if (update.selectionSet || update.selectionSet) {
+    function update(update) {
+        if (update.selectionSet) {
             if (!update.docChanged) {
                 return
             }
         }
         if (update.changes) {
             md.value = update.state.doc.toString();
+            lines.value = update.state.doc.lines
         }
     }
-
-    const debounceUpdate = debounce(update, 400)
+    const debounceUpdate = debounce(update, 200)
     let cmState = EditorState.create({
-        doc: editorHolder,
+        doc: MarkDownSample,
         extensions: [
             keymap.of(defaultKeymap),
             EditorView.lineWrapping,
@@ -515,14 +499,26 @@ function createCodemirrorEditor() {
             EditorView.updateListener.of(debounceUpdate),
             EditorView.domEventHandlers({
                 scroll: onEditorScroll
-            })
+            }),
+            EditorView.theme({
+                ".cm-cursor": {
+                    caretColor: "auto"
+                },
+                ".cm-content": {
+                    padding: "16px 0 ",
+                    maxWidth: "800px",
+                    margin: "0 auto",
+
+                },
+
+            }, { dark: false })
         ]
     })
 
     cmView = new EditorView({
         state: cmState,
         lineWrapping: true,
-        parent: document.querySelector('#codemirror-editor-root')
+        parent: document.querySelector('#codemirror-editor-root'),
     })
 }
 
@@ -586,11 +582,11 @@ function onEditorScroll(e) {
     const previewScrollHeight = previewAreaRef.value.scrollHeight
     const editorClientHeight = e.target.clientHeight
     if (editorScrollTop >= eidtorScrollHeight - editorClientHeight) {
-        console.log("到底")
+        console.log("editor reach bottom")
         previewAreaRef.value.scrollTop = previewScrollHeight
         return
     } else if (editorScrollTop === 0) {
-        console.log("到顶")
+        console.log("editor reach top")
         previewAreaRef.value.scrollTop = 0
     }
     computeScrollPos()
@@ -617,11 +613,11 @@ function onPreviewScroll(e) {
     const editorScrollHeight = editorAreaRef.value.scrollHeight
     const previewClientHeight = e.target.clientHeight
     if (previewScrollTop >= previewScrollHeight - previewClientHeight) {
-        console.log("到底")
+        console.log("preview reach bottom")
         editorAreaRef.value.scrollTop = editorScrollHeight
         return
     } else if (previewScrollTop === 0) {
-        console.log("到顶")
+        console.log("preview reach top")
         editorAreaRef.value.scrollTop = 0
         return
     }
@@ -640,19 +636,15 @@ function onPreviewScroll(e) {
     editorAreaRef.value.scrollTop = unistTreeTops[index] + offset * editorNodeHeight / previewNodeHeight
 }
 
-const debOnPreviewScroll = debounce(onPreviewScroll, 100)
-
 function updateTocActive() {
     const editorScrollTop = editorAreaRef.value.scrollTop
     let activeHeadingIndex = 0
     for (let i = 0; i < tocData.value.length; i++) {
-        console.log(unistHeadingTops[i], editorScrollTop)
         if (unistHeadingTops[i] > editorScrollTop) {
             activeHeadingIndex = i - 1
             break
         }
     }
-    console.log(activeHeadingIndex)
     tocData.value.forEach((item, index) => {
         item.active = index === activeHeadingIndex
     })
@@ -725,16 +717,28 @@ onMounted(() => {
                     <ImageIcon class="tool-icon img-icon" />
                 </label>
             </div>
-            <input id="img-upload" type="file" @change="onImgInputChange" accept="image/*" style="opacity: 0;">
+            <div data-tippy-icon class="tools-item mermaid-g" data-tippy-tooltip-path="16">
+                <MermaidIcon class="tool-icon mermaid-icon" />
+                <div class="tools-dropdown">
+                    <div class="tool-dropdown-title">Mermaid图表</div>
+                    <div class="tools-dropdown-item" v-for="(type, i) in mermaidSampleNames"
+                        :data-tippy-tooltip-path="`16-${i}`" @click="makeMermaidGraph(i)">
+                        <div class="tools-dropdown-item-title">{{ type }}</div>
+                    </div>
+                </div>
+            </div>
+            <input id="img-upload" type="file" @change="onImgInputChange" accept="image/*" style="display: none;">
             <div class="flex-grow"></div>
-            <div data-tippy-icon class="tools-item toc" :class="{ iconActive: tocVisible }" data-tippy-tooltip-path="11"
+            <div data-tippy-icon class="tools-item toc" :class="{ active: tocVisible }" data-tippy-tooltip-path="11"
                 @click="toggleTocVisible">
                 <TocIcon class="tool-icon toc-icon" />
             </div>
-            <div data-tippy-icon class="tools-item only-editor" data-tippy-tooltip-path="14" @click="onOnlyEditorClick">
+            <div data-tippy-icon class="tools-item only-editor" :class="{ active: onlyEditorActive }"
+                data-tippy-tooltip-path="14" @click="onOnlyEditorClick">
                 <OnlyEditorIcon class="tool-icon only-editor-icon" />
             </div>
-            <div data-tippy-icon class="tools-item only-pre" data-tippy-tooltip-path="15" @click="togEditorVisible">
+            <div data-tippy-icon class="tools-item only-pre" :class="{ active: onlyPreActive }"
+                data-tippy-tooltip-path="15" @click="togEditorVisible">
                 <OnlyPreIcon class="tool-icon only-pre-icon" />
             </div>
             <div v-show="!isFullscreen" data-tippy-icon class="tools-item fullscreen" data-tippy-tooltip-path="12"
@@ -767,9 +771,9 @@ onMounted(() => {
             </div>
         </div>
         <div class="footer-status">
-            <span>字符数</span>
-            <span>行数</span>
-            <span>正文字数</span>
+            <span>字符数:{{ md.length }}</span>
+            <span>行数:{{ lines }}</span>
+            <span>正文字数:</span>
         </div>
     </div>
 </template>
@@ -778,40 +782,14 @@ onMounted(() => {
 .ͼ1.cm-focused {
     outline: none !important;
 }
+
+.tools .tippy-content {
+    padding-left: 0;
+    padding-right: 0;
+}
 </style>
 
 <style lang="css" scoped>
-.tools-dropdown {
-    background-color: #fff;
-    max-height: 300px;
-    overflow: auto;
-
-    .tools-dropdown-item {
-        display: flex;
-        height: 32px;
-        align-items: center;
-        justify-content: center;
-        padding: 4px 12px;
-        font-size: 14px;
-        cursor: pointer;
-        border-radius: 5px;
-
-        &:hover {
-            background-color: #efefef;
-        }
-
-        .tools-dropdown-item-icon {
-            height: 23px;
-            width: 23px;
-        }
-
-        .tools-dropdown-item-title {
-            vertical-align: top;
-            line-height: 25px;
-        }
-    }
-}
-
 .markdown-editor {
     height: 100vh;
     width: 100vw;
@@ -841,8 +819,47 @@ onMounted(() => {
         background-color: #fafbfc;
         border: solid 1px #e1e4e8;
 
+        .tools-dropdown {
+            background-color: #fff;
+            max-height: 300px;
+            overflow: auto;
+
+            .tool-dropdown-title {
+                box-sizing: border-box;
+                height: 32px;
+                font-size: 16px;
+                padding-top: 4px;
+                margin: 0 12px;
+                border-bottom: solid 1px #e1e4e8;
+            }
+
+            .tools-dropdown-item {
+                display: flex;
+                height: 32px;
+                align-items: center;
+                justify-content: start;
+                padding: 4px 12px;
+                font-size: 14px;
+                cursor: pointer;
+
+                &:hover {
+                    background-color: #efefef;
+                }
+
+                .tools-dropdown-item-icon {
+                    height: 23px;
+                    width: 23px;
+                }
+
+                .tools-dropdown-item-title {
+                    vertical-align: top;
+                    line-height: 25px;
+                }
+            }
+        }
+
         .tools-item {
-            display: flex;
+            display: inline-flex;
             margin: 0 6px;
             justify-content: center;
             align-items: center;
@@ -872,6 +889,8 @@ onMounted(() => {
         .flex-grow {
             flex-grow: 1;
         }
+
+
     }
 
     .editor-split {
